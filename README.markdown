@@ -16,11 +16,9 @@ A Playnite plugin that imports non-Steam games from Steam shortcuts into your Pl
 
 ## Installation
 
-1. Download the latest release from the [Releases](https://github.com/<YourGitHubUsername>/SteamNonSteamImporter/releases) page.
-2. Extract the contents to your Playnite Extensions directory:
-   - `C:\Users\<YourUser>\AppData\Roaming\Playnite\Extensions\SteamNonSteamImporter`
-3. Launch Playnite, go to **Add-ons** → **Extensions**, and ensure the plugin is enabled.
-4. Update your library by clicking the refresh button or navigating to **Library** → **Games** → **Update All**.
+1. Download the latest release from the [Releases](https://github.com/<YourGitHubUsername>/SteamNonSteamImporter/releases) and follow instructions on Playnite.
+2. Launch Playnite, go to **Add-ons** → **Extensions**, and ensure the plugin is enabled.
+3. Update your library by clicking the refresh button or navigating to **Library** → **Games** → **Update All**.
 
 ## Configuration
 
