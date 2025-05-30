@@ -31,7 +31,7 @@ The plugin automatically detects your Steam folder and user data path. However, 
    ```json
    {
      "SteamPath": "D:\\Games\\Steam",
-     "UserDataPath": "D:\\Games\\Steam\\userdata\\54808062"
+     "UserDataPath": "D:\\Games\\Steam\\userdata"
    }
    ```
    - `SteamPath`: The path to your Steam installation. Leave empty (`""`) to use automatic detection.
