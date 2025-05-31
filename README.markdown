@@ -57,11 +57,3 @@ If the specified paths do not exist, the plugin will fall back to automatic dete
 
 Contributions are welcome! Feel free to open an issue or submit a pull request on GitHub.
 
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Built for Playnite 10 using .NET Framework 4.8.
-- Thanks to the Playnite community for their support and feedback.
