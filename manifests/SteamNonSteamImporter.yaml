@@ -3,7 +3,7 @@ Type: GameLibrary
 Name: Steam Non Steam Importer
 Author: Phalk
 ShortDescription: Imports Steam non Steam (from Steam's shortcuts.vdf)
-InstallerManifestUrl: https://raw.githubusercontent.com/Phalk/SteamNonSteamImporter/refs/heads/main/manifests/SteamNonSteamImporter.yaml
+InstallerManifestUrl: https://raw.githubusercontent.com/Phalk/SteamNonSteamImporter/refs/heads/main/manifests/manifest.yaml
 SourceUrl: https://github.com/Phalk/SteamNonSteamImporter
 Links:
   Phalk's Website: https://phalk.net/
