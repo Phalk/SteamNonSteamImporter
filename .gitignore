@@ -1,0 +1,11 @@
+.vs/
+[Bb]in/
+[Oo]bj/
+packages/
+*.user
+*.suo
+*.pdb
+*.pext
+*.nupkg
+_ReSharper*/
+*.DotSettings.user

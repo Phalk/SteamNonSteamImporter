@@ -1,7 +1,121 @@
-﻿<UserControl x:Class="SteamNonSteamImporter.SteamNonSteamImporterSettingsView"
+<UserControl x:Class="SteamNonSteamImporter.SteamNonSteamImporterSettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              mc:Ignorable="d"
-             d:DesignHeight="400" d:DesignWidth="600"/>
+             d:DesignHeight="650"
+             d:DesignWidth="760">
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="12">
+            <TextBlock Text="Steam Non-Steam Importer"
+                       FontSize="22"
+                       FontWeight="SemiBold"
+                       Margin="0,0,0,4" />
+            <TextBlock Text="Imports non-Steam shortcuts from shortcuts.vdf. The paths below are optional; when left empty, the plugin attempts to detect Steam automatically."
+                       TextWrapping="Wrap"
+                       Opacity="0.8"
+                       Margin="0,0,0,16" />
+
+            <GroupBox Header="Paths" Margin="0,0,0,12">
+                <Grid Margin="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Grid.Column="0"
+                               Text="Steam folder:"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,8" />
+                    <TextBox Grid.Row="0"
+                             Grid.Column="1"
+                             Text="{Binding Settings.SteamPath, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,8,8"
+                             MinWidth="320" />
+                    <Button Grid.Row="0"
+                            Grid.Column="2"
+                            Content="Browse..."
+                            Padding="12,3"
+                            Margin="0,0,0,8"
+                            Click="SelectSteamFolder_Click" />
+
+                    <TextBlock Grid.Row="1"
+                               Grid.Column="0"
+                               Text="Userdata folder:"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <TextBox Grid.Row="1"
+                             Grid.Column="1"
+                             Text="{Binding Settings.UserDataPath, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,8,0"
+                             MinWidth="320" />
+                    <Button Grid.Row="1"
+                            Grid.Column="2"
+                            Content="Browse..."
+                            Padding="12,3"
+                            Click="SelectUserDataFolder_Click" />
+                </Grid>
+            </GroupBox>
+
+            <GroupBox Header="Diagnostics" Margin="0,0,0,12">
+                <StackPanel Margin="10">
+                    <CheckBox Content="Show detailed logs in the panel below"
+                              IsChecked="{Binding Settings.EnableDetailedLogging}"
+                              Margin="0,0,0,8" />
+                    <CheckBox Content="Also write to Playnite extensions.log"
+                              IsChecked="{Binding Settings.WriteToPlayniteLog}"
+                              Margin="0,0,0,6" />
+                    <TextBlock Text="Writing to extensions.log is disabled by default. The panel keeps only the 300 most recent entries from the current session."
+                               TextWrapping="Wrap"
+                               Opacity="0.75" />
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="Session log">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                Margin="0,0,0,8">
+                        <Button Content="Copy"
+                                Padding="12,3"
+                                Margin="0,0,6,0"
+                                Click="CopyLogs_Click" />
+                        <Button Content="Clear"
+                                Padding="12,3"
+                                Click="ClearLogs_Click" />
+                    </StackPanel>
+
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding LogEntries}"
+                             MinHeight="220"
+                             MaxHeight="360"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingStackPanel.IsVirtualizing="True">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayText}"
+                                           FontFamily="Consolas"
+                                           TextWrapping="Wrap"
+                                           Margin="2" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </GroupBox>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

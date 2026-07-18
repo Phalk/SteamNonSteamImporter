@@ -1,17 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using Playnite.SDK;
+using System;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
 
 namespace SteamNonSteamImporter
 {
@@ -20,6 +10,41 @@ namespace SteamNonSteamImporter
         public SteamNonSteamImporterSettingsView()
         {
             InitializeComponent();
+        }
+
+        private SteamNonSteamImporterSettingsViewModel ViewModel =>
+            DataContext as SteamNonSteamImporterSettingsViewModel;
+
+        private void SelectSteamFolder_Click(object sender, RoutedEventArgs e)
+        {
+            var path = API.Instance.Dialogs.SelectFolder();
+            if (!string.IsNullOrWhiteSpace(path) && ViewModel != null)
+            {
+                ViewModel.Settings.SteamPath = path;
+            }
+        }
+
+        private void SelectUserDataFolder_Click(object sender, RoutedEventArgs e)
+        {
+            var path = API.Instance.Dialogs.SelectFolder();
+            if (!string.IsNullOrWhiteSpace(path) && ViewModel != null)
+            {
+                ViewModel.Settings.UserDataPath = path;
+            }
+        }
+
+        private void CopyLogs_Click(object sender, RoutedEventArgs e)
+        {
+            var text = ViewModel?.GetLogText();
+            if (!string.IsNullOrEmpty(text))
+            {
+                Clipboard.SetText(text);
+            }
+        }
+
+        private void ClearLogs_Click(object sender, RoutedEventArgs e)
+        {
+            ViewModel?.ClearLogs();
         }
     }
 }

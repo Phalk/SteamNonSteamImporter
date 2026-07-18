@@ -1,495 +1,466 @@
-﻿using Playnite.SDK;
+using Microsoft.Win32;
+using Playnite.SDK;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
-using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
-using System.Text; // For Encoding.UTF8
-using System.Linq; // Keep this for Any() if you still use it in GameMetadata section
-using Newtonsoft.Json; // Para parsing do JSON
+using System.Text;
+using System.Windows.Controls;
 
 namespace SteamNonSteamImporter
 {
-    public class SteamNonSteamImporter : LibraryPlugin
+    public sealed class SteamNonSteamImporter : LibraryPlugin
     {
-        private static readonly ILogger logger = LogManager.GetLogger();
+        private const byte VdfObject = 0x00;
+        private const byte VdfString = 0x01;
+        private const byte VdfInt32 = 0x02;
+        private const byte VdfFloat32 = 0x03;
+        private const byte VdfPointer = 0x04;
+        private const byte VdfWideString = 0x05;
+        private const byte VdfColor = 0x06;
+        private const byte VdfUInt64 = 0x07;
+        private const byte VdfEnd = 0x08;
+        private const byte VdfInt64 = 0x0A;
 
-        // Classe para desserializar o settings.json
-        private class PluginSettings
-        {
-            public string SteamPath { get; set; } = string.Empty;
-            public string UserDataPath { get; set; } = string.Empty;
-        }
-
-        private readonly PluginSettings settings;
+        private readonly SteamNonSteamImporterSettingsViewModel settingsViewModel;
+        private readonly PluginLog log;
 
         public override Guid Id { get; } = Guid.Parse("8d105bff-eac4-45c5-90ba-c77fdd66b882");
         public override string Name => "Steam Non-Steam Importer";
 
+        private SteamNonSteamImporterSettings Settings => settingsViewModel.Settings;
+
         public SteamNonSteamImporter(IPlayniteAPI api) : base(api)
         {
+            settingsViewModel = new SteamNonSteamImporterSettingsViewModel(this);
+            log = new PluginLog(api, () => settingsViewModel.Settings, settingsViewModel.LogEntries);
+
             Properties = new LibraryPluginProperties
             {
-                HasSettings = false
+                HasSettings = true
             };
 
-            // Carregar configurações do settings.json
-            settings = LoadSettings();
-            logger.Info("SteamNonSteamImporter inicializado.");
+            log.Info("Plugin loaded. Writing to the Playnite log is disabled by default.");
         }
 
-        private PluginSettings LoadSettings()
+        public override ISettings GetSettings(bool firstRunSettings)
         {
-            string settingsPath = Path.Combine(GetPluginUserDataPath(), "settings.json");
-            logger.Info($"Tentando carregar configurações de: {settingsPath}");
+            return settingsViewModel;
+        }
 
-            try
-            {
-                if (File.Exists(settingsPath))
-                {
-                    string jsonContent = File.ReadAllText(settingsPath);
-                    var loadedSettings = JsonConvert.DeserializeObject<PluginSettings>(jsonContent);
-                    logger.Info("Configurações carregadas com sucesso.");
-                    return loadedSettings ?? new PluginSettings();
-                }
-                else
-                {
-                    logger.Warn("Arquivo settings.json não encontrado. Criando um novo com valores padrão.");
-                    var defaultSettings = new PluginSettings();
-                    File.WriteAllText(settingsPath, JsonConvert.SerializeObject(defaultSettings, Formatting.Indented));
-                    return defaultSettings;
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.Error(ex, "Erro ao carregar settings.json. Usando valores padrão.");
-                PlayniteApi.Notifications.Add(new NotificationMessage(
-                    "SteamNonSteamImporterSettingsError",
-                    $"Erro ao carregar configurações: {ex.Message}. Usando valores padrão.",
-                    NotificationType.Error));
-                return new PluginSettings();
-            }
+        public override UserControl GetSettingsView(bool firstRunSettings)
+        {
+            return new SteamNonSteamImporterSettingsView();
         }
 
         public override IEnumerable<GameMetadata> GetGames(LibraryGetGamesArgs args)
         {
             var games = new List<GameMetadata>();
-            logger.Info("Iniciando importação de jogos não Steam (parse manual).");
+            var userDataPath = GetSteamUserDataPath();
 
-            string steamUserDataPath = GetSteamUserDataPath();
-            logger.Info($"Caminho do Steam userdata detectado: {steamUserDataPath ?? "Não encontrado"}");
+            log.Info("Import started.");
 
-            if (string.IsNullOrEmpty(steamUserDataPath) || !Directory.Exists(steamUserDataPath))
+            if (string.IsNullOrEmpty(userDataPath) || !Directory.Exists(userDataPath))
             {
-                PlayniteApi.Notifications.Add(new NotificationMessage(
-                    "SteamNonSteamImporterError",
-                    "Não foi possível localizar a pasta 'userdata' do Steam.",
-                    NotificationType.Error));
-                logger.Error($"Caminho do Steam userdata não encontrado ou não existe: {steamUserDataPath}");
+                const string message = "The Steam userdata folder could not be located.";
+                log.Error(message);
+                AddErrorNotification("SteamNonSteamImporter.Path", message);
                 return games;
             }
 
-            try
-            {
-                foreach (var userFolder in Directory.GetDirectories(steamUserDataPath))
-                {
-                    logger.Info($"Explorando pasta de usuário: {userFolder}");
-                    string shortcutsPath = Path.Combine(userFolder, "config", "shortcuts.vdf");
-
-                    if (File.Exists(shortcutsPath))
-                    {
-                        logger.Info($"Arquivo shortcuts.vdf encontrado em: {shortcutsPath}. Processando manualmente.");
-
-                        try
-                        {
-                            var parsedShortcuts = ParseShortcutsVdf(shortcutsPath);
-
-                            if (parsedShortcuts == null || parsedShortcuts.Count == 0)
-                            {
-                                logger.Info($"Nenhum atalho não Steam encontrado ou o arquivo '{shortcutsPath}' está vazio/inválido após o parse manual.");
-                                continue;
-                            }
-
-                            foreach (var shortcutData in parsedShortcuts.Values)
-                            {
-                                string appName = shortcutData.ContainsKey("AppName") ? shortcutData["AppName"] : null;
-                                string exePath = shortcutData.ContainsKey("Exe") ? shortcutData["Exe"].Trim('"') : null;
-                                string appIdString = shortcutData.ContainsKey("appid") ? shortcutData["appid"] : "0";
-
-                                uint appId = 0;
-                                if (!uint.TryParse(appIdString, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out appId))
-                                {
-                                    logger.Warn($"Não foi possível converter 'appid' para uint: {appIdString}. Usando 0.");
-                                }
-
-                                string iconPath = shortcutData.ContainsKey("icon") ? shortcutData["icon"].Trim('"') : null;
-
-                                if (string.IsNullOrEmpty(appName) || string.IsNullOrEmpty(exePath))
-                                {
-                                    logger.Warn($"Atalho ignorado por falta de AppName ou Exe. Caminho: {shortcutsPath}");
-                                    continue;
-                                }
-
-                                bool isInstalled = File.Exists(exePath);
-
-                                // Calculate the 64-bit rungameid from the 32-bit appId
-                                ulong rungameId = ((ulong)appId << 32) | 0x02000000UL;
-
-                                var game = new GameMetadata
-                                {
-                                    Name = appName,
-                                    GameId = $"nonsteam_{appId}",
-                                    Source = new MetadataNameProperty("Steam"),
-                                    Platforms = new HashSet<MetadataProperty> { new MetadataNameProperty("PC (Windows)") },
-                                    InstallDirectory = Path.GetDirectoryName(exePath),
-                                    IsInstalled = isInstalled,
-                                    Icon = !string.IsNullOrEmpty(iconPath) && File.Exists(iconPath) ? new MetadataFile(iconPath) : null,
-                                    GameActions = new List<GameAction>
-                                    {
-                                        new GameAction
-                                        {
-                                            Type = GameActionType.URL, // Alterado para URL
-                                            Path = $"steam://rungameid/{rungameId}", // Usando o rungameId calculado
-                                            IsPlayAction = true,
-                                            Name = "Play via Steam" // Nome da ação atualizado para refletir o método de lançamento
-                                        }
-                                    }
-                                };
-
-                                games.Add(game);
-                                logger.Info($"Jogo importado: {appName}, Exe: {exePath}, Instalado: {isInstalled}");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.Error(ex, $"Erro ao processar o arquivo shortcuts.vdf manualmente: {shortcutsPath}");
-                            PlayniteApi.Notifications.Add(new NotificationMessage(
-                               "SteamVdfParseError",
-                               $"Erro ao processar o arquivo shortcuts.vdf: {ex.Message}",
-                               NotificationType.Error));
-                        }
-                    }
-                    else
-                    {
-                        logger.Info($"Arquivo shortcuts.vdf não encontrado em: {shortcutsPath}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                PlayniteApi.Notifications.Add(new NotificationMessage(
-                    "SteamNonSteamImporterError",
-                    $"Erro geral ao importar jogos não Steam: {ex.Message}",
-                    NotificationType.Error));
-                logger.Error(ex, "Erro geral na importação de jogos.");
-            }
-
-            logger.Info($"Total de jogos não Steam importados: {games.Count}");
-            return games;
-        }
-
-        // --- Manual VDF Parsing Logic ---
-        private Dictionary<string, Dictionary<string, string>> ParseShortcutsVdf(string filePath)
-        {
-            var shortcuts = new Dictionary<string, Dictionary<string, string>>();
-            logger.Debug($"ParseShortcutsVdf: Iniciando parse para {filePath}");
+            var userFoldersScanned = 0;
+            var shortcutFilesFound = 0;
+            var ignoredShortcuts = 0;
 
             try
             {
-                using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-                using (var reader = new BinaryReader(fs, Encoding.UTF8))
+                foreach (var userFolder in Directory.GetDirectories(userDataPath))
                 {
-                    logger.Debug($"ParseShortcutsVdf: Tamanho do arquivo: {reader.BaseStream.Length} bytes.");
+                    userFoldersScanned++;
+                    var shortcutsPath = Path.Combine(userFolder, "config", "shortcuts.vdf");
 
-                    if (reader.BaseStream.Length < 1)
+                    if (!File.Exists(shortcutsPath))
                     {
-                        logger.Warn($"ParseShortcutsVdf: Arquivo VDF '{filePath}' está vazio.");
-                        return null;
+                        log.Debug($"No shortcuts.vdf found for {Path.GetFileName(userFolder)}.");
+                        continue;
                     }
 
-                    byte firstByte = reader.ReadByte();
-                    logger.Debug($"ParseShortcutsVdf: Posição inicial: {fs.Position - 1}, Primeiro byte: {firstByte} (0x{firstByte:X2})");
-                    if (firstByte != 0x00)
+                    shortcutFilesFound++;
+                    log.Debug($"Reading {shortcutsPath}.");
+
+                    Dictionary<string, Dictionary<string, string>> parsedShortcuts;
+                    try
                     {
-                        logger.Warn($"ParseShortcutsVdf: Arquivo VDF '{filePath}' não inicia com o tipo de objeto esperado (0x00). Encontrado: 0x{firstByte:X2}.");
-                        return null;
+                        parsedShortcuts = ParseShortcutsVdf(shortcutsPath);
+                    }
+                    catch (Exception exception)
+                    {
+                        ignoredShortcuts++;
+                        log.Error($"Failed to read {shortcutsPath}.", exception);
+                        continue;
                     }
 
-                    string rootKey = ReadNullTerminatedString(reader);
-                    logger.Debug($"ParseShortcutsVdf: Posição após rootKey: {fs.Position}, Chave raiz: '{rootKey}'");
-                    if (!rootKey.Equals("shortcuts", StringComparison.OrdinalIgnoreCase))
+                    foreach (var shortcut in parsedShortcuts)
                     {
-                        logger.Warn($"ParseShortcutsVdf: Chave raiz inesperada no VDF '{filePath}'. Esperado 'shortcuts', encontrado '{rootKey}'.");
-                        return null;
-                    }
+                        var data = shortcut.Value;
+                        var appName = GetValue(data, "AppName");
+                        var exePath = NormalizeFilePath(GetValue(data, "Exe"));
+                        var iconPath = NormalizeIconPath(GetValue(data, "icon"));
+                        var appIdText = GetValue(data, "appid") ?? "0";
 
-                    if (reader.BaseStream.Position >= reader.BaseStream.Length)
-                    {
-                        logger.Warn($"ParseShortcutsVdf: Fim de arquivo inesperado após chave 'shortcuts' em '{filePath}'.");
-                        return null;
-                    }
-                    byte shortcutsObjectTypeByte = reader.ReadByte();
-                    logger.Debug($"ParseShortcutsVdf: Posição após shortcutsObjectTypeByte: {fs.Position}, Byte do tipo de objeto 'shortcuts': {shortcutsObjectTypeByte} (0x{shortcutsObjectTypeByte:X2})");
-                    if (shortcutsObjectTypeByte != 0x00)
-                    {
-                        logger.Warn($"ParseShortcutsVdf: Objeto 'shortcuts' em '{filePath}' não inicia com o tipo de objeto esperado (0x00). Encontrado: 0x{shortcutsObjectTypeByte:X2}.");
-                        return null;
-                    }
-
-                    logger.Debug("ParseShortcutsVdf: Entrando no loop de leitura de atalhos individuais.");
-                    int shortcutCount = 0;
-                    while (reader.BaseStream.Position < reader.BaseStream.Length)
-                    {
-                        logger.Debug($"ParseShortcutsVdf: --- Início do loop de atalho, Posição atual: {fs.Position} ---");
-
-                        byte nextByte = reader.ReadByte();
-                        logger.Debug($"ParseShortcutsVdf: Posição após nextByte (para decisão): {fs.Position}, Byte lido: {nextByte} (0x{nextByte:X2})");
-
-                        if (nextByte == 0x08)
+                        uint appId;
+                        if (!uint.TryParse(appIdText, NumberStyles.Integer, CultureInfo.InvariantCulture, out appId))
                         {
-                            logger.Debug("ParseShortcutsVdf: Fim do objeto 'shortcuts' (0x08) encontrado. Saindo do loop de atalhos.");
-                            break;
+                            appId = 0;
                         }
 
-                        reader.BaseStream.Seek(-1, SeekOrigin.Current);
-                        logger.Debug($"ParseShortcutsVdf: Revertendo posição do stream para {fs.Position}. Byte 0x{nextByte:X2} será lido novamente como parte da chave.");
-
-                        string shortcutIndex = ReadNullTerminatedString(reader);
-                        logger.Debug($"ParseShortcutsVdf: Posição após shortcutIndex: {fs.Position}, Atalho index: '{shortcutIndex}'");
-
-                        if (string.IsNullOrEmpty(shortcutIndex))
+                        if (string.IsNullOrWhiteSpace(appName) || string.IsNullOrWhiteSpace(exePath))
                         {
-                            logger.Debug($"ParseShortcutsVdf: Índice de atalho vazio encontrado na posição {fs.Position}. Verificando fim do objeto 'shortcuts'.");
-                            if (reader.BaseStream.Position < reader.BaseStream.Length)
-                            {
-                                byte checkByte = reader.ReadByte();
-                                if (checkByte == 0x08)
-                                {
-                                    logger.Debug("ParseShortcutsVdf: Fim do objeto 'shortcuts' (0x08) encontrado após índice vazio. Saindo do loop de atalhos.");
-                                    break;
-                                }
-                                else
-                                {
-                                    logger.Warn($"ParseShortcutsVdf: Índice vazio seguido de byte inesperado 0x{checkByte:X2} na posição {fs.Position - 1}. Pulando.");
-                                    reader.BaseStream.Seek(-1, SeekOrigin.Current);
-                                }
-                            }
+                            ignoredShortcuts++;
+                            log.Debug($"Shortcut {shortcut.Key} skipped: missing name or executable.");
                             continue;
                         }
 
-                        var currentShortcut = new Dictionary<string, string>();
-                        shortcutCount++;
-
-                        logger.Debug($"ParseShortcutsVdf: Entrando no loop de propriedades para atalho '{shortcutIndex}'.");
-                        while (reader.BaseStream.Position < reader.BaseStream.Length)
+                        var isInstalled = File.Exists(exePath);
+                        var runGameId = ((ulong)appId << 32) | 0x02000000UL;
+                        var gameActions = new List<GameAction>
                         {
-                            byte propertyType = reader.ReadByte();
-                            logger.Debug($"ParseShortcutsVdf: Posição após propertyType: {fs.Position}, Byte lido para tipo de propriedade: {propertyType} (0x{propertyType:X2})");
-
-                            if (propertyType == 0x08)
+                            new GameAction
                             {
-                                logger.Debug($"ParseShortcutsVdf: Fim do objeto de atalho '{shortcutIndex}' (0x08) encontrado. Saindo do loop de propriedades.");
-                                break;
-                            }
-
-                            string propertyName = ReadNullTerminatedString(reader);
-                            logger.Debug($"ParseShortcutsVdf: Posição após propertyName: {fs.Position}, Nome da propriedade: '{propertyName}'");
-                            string propertyValue = null;
-
-                            switch (propertyType)
+                                Type = GameActionType.URL,
+                                Path = $"steam://rungameid/{runGameId}",
+                                IsPlayAction = true,
+                                Name = "Play via Steam"
+                            },
+                            new GameAction
                             {
-                                case 0x00:
-                                    logger.Debug($"ParseShortcutsVdf: Encontrado objeto aninhado para propriedade '{propertyName}'. Processando...");
-                                    SkipObject(reader);
-                                    logger.Debug($"ParseShortcutsVdf: Objeto aninhado para '{propertyName}' pulado.");
-                                    break;
-                                case 0x01:
-                                    propertyValue = ReadNullTerminatedString(reader);
-                                    logger.Debug($"ParseShortcutsVdf: Posição após stringValue: {fs.Position}, Valor da propriedade (string): '{propertyValue}'");
-                                    break;
-                                case 0x02:
-                                    if (reader.BaseStream.Position + 4 > reader.BaseStream.Length)
-                                    {
-                                        logger.Warn($"ParseShortcutsVdf: Fim de arquivo inesperado ao tentar ler 4 bytes para o inteiro '{propertyName}' em '{filePath}'.");
-                                        return null;
-                                    }
-                                    byte[] intBytes = reader.ReadBytes(4);
-                                    propertyValue = BitConverter.ToUInt32(intBytes, 0).ToString(System.Globalization.CultureInfo.InvariantCulture);
-                                    logger.Debug($"ParseShortcutsVdf: Posição após intValue: {fs.Position}, Valor da propriedade (uint): '{propertyValue}'");
-                                    break;
-                                default:
-                                    logger.Error($"ParseShortcutsVdf: ERRO: Tipo de propriedade VDF desconhecido ({propertyType}) para '{propertyName}' em '{filePath}'. Pulando e encerrando parse para este arquivo.");
-                                    return null;
+                                Type = GameActionType.File,
+                                Path = exePath,
+                                IsPlayAction = false,
+                                Name = "Launch directly"
                             }
+                        };
 
-                            if (propertyType != 0x00 && propertyName != null && propertyValue != null)
+                        var gameId = appId == 0
+                            ? $"nonsteam_{Path.GetFileName(userFolder)}_{shortcut.Key}"
+                            : $"nonsteam_{appId}";
+
+                        games.Add(new GameMetadata
+                        {
+                            Name = appName,
+                            GameId = gameId,
+                            Source = new MetadataNameProperty("Steam"),
+                            Platforms = new HashSet<MetadataProperty>
                             {
-                                currentShortcut[propertyName] = propertyValue;
-                                logger.Debug($"ParseShortcutsVdf: Propriedade adicionada: '{propertyName}' = '{propertyValue}'");
-                            }
-                        }
-                        shortcuts[shortcutIndex] = currentShortcut;
-                        logger.Debug($"ParseShortcutsVdf: Atalho '{shortcutIndex}' adicionado ao dicionário principal.");
+                                new MetadataNameProperty("PC (Windows)")
+                            },
+                            InstallDirectory = isInstalled ? Path.GetDirectoryName(exePath) : null,
+                            IsInstalled = isInstalled,
+                            Icon = !string.IsNullOrEmpty(iconPath) && File.Exists(iconPath)
+                                ? new MetadataFile(iconPath)
+                                : null,
+                            GameActions = gameActions
+                        });
+
+                        log.Debug($"Imported: {appName}.");
                     }
-                    logger.Debug($"ParseShortcutsVdf: Finalizado o parse de '{filePath}'. Total de atalhos encontrados: {shortcutCount}");
                 }
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                logger.Error(ex, $"ParseShortcutsVdf: Erro inesperado durante o parse manual do VDF '{filePath}'.");
-                return null;
+                const string message = "The import was interrupted by an unexpected error.";
+                log.Error(message, exception);
+                AddErrorNotification("SteamNonSteamImporter.Import", $"{message} {exception.Message}");
             }
 
+            log.Info(
+                $"Import completed: {games.Count} game(s), " +
+                $"{ignoredShortcuts} skipped, {shortcutFilesFound} file(s) across " +
+                $"{userFoldersScanned} user folder(s).");
+
+            return games;
+        }
+
+        private Dictionary<string, Dictionary<string, string>> ParseShortcutsVdf(string filePath)
+        {
+            var shortcuts = new Dictionary<string, Dictionary<string, string>>();
+
+            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var reader = new BinaryReader(stream, Encoding.UTF8))
+            {
+                if (stream.Length == 0)
+                {
+                    return shortcuts;
+                }
+
+                var rootType = reader.ReadByte();
+                var rootName = ReadNullTerminatedString(reader);
+                if (rootType != VdfObject || !string.Equals(rootName, "shortcuts", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("The file does not contain the 'shortcuts' VDF root.");
+                }
+
+                while (stream.Position < stream.Length)
+                {
+                    var valueType = reader.ReadByte();
+                    if (valueType == VdfEnd)
+                    {
+                        break;
+                    }
+
+                    var shortcutIndex = ReadNullTerminatedString(reader);
+                    if (valueType != VdfObject)
+                    {
+                        SkipValue(reader, valueType);
+                        continue;
+                    }
+
+                    shortcuts[shortcutIndex] = ReadObjectValues(reader);
+                }
+            }
+
+            log.Debug($"VDF parsed: {shortcuts.Count} shortcut(s) in {Path.GetFileName(filePath)}.");
             return shortcuts;
+        }
+
+        private Dictionary<string, string> ReadObjectValues(BinaryReader reader)
+        {
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            while (reader.BaseStream.Position < reader.BaseStream.Length)
+            {
+                var valueType = reader.ReadByte();
+                if (valueType == VdfEnd)
+                {
+                    break;
+                }
+
+                var name = ReadNullTerminatedString(reader);
+                switch (valueType)
+                {
+                    case VdfObject:
+                        SkipObject(reader);
+                        break;
+                    case VdfString:
+                        values[name] = ReadNullTerminatedString(reader);
+                        break;
+                    case VdfInt32:
+                        EnsureBytesAvailable(reader, 4);
+                        values[name] = reader.ReadUInt32().ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case VdfUInt64:
+                        EnsureBytesAvailable(reader, 8);
+                        values[name] = reader.ReadUInt64().ToString(CultureInfo.InvariantCulture);
+                        break;
+                    case VdfInt64:
+                        EnsureBytesAvailable(reader, 8);
+                        values[name] = reader.ReadInt64().ToString(CultureInfo.InvariantCulture);
+                        break;
+                    default:
+                        SkipValue(reader, valueType);
+                        break;
+                }
+            }
+
+            return values;
         }
 
         private void SkipObject(BinaryReader reader)
         {
-            logger.Debug($"SkipObject: Iniciando skip de objeto na posição {reader.BaseStream.Position}.");
-            int depth = 1;
-            while (reader.BaseStream.Position < reader.BaseStream.Length && depth > 0)
+            while (reader.BaseStream.Position < reader.BaseStream.Length)
             {
-                byte typeByte = reader.ReadByte();
-                if (typeByte != 0x08)
+                var valueType = reader.ReadByte();
+                if (valueType == VdfEnd)
                 {
-                    ReadNullTerminatedString(reader);
-                    if (typeByte == 0x00)
-                    {
-                        depth++;
-                        logger.Debug($"SkipObject: Encontrado objeto aninhado. Profundidade: {depth}.");
-                    }
-                    else if (typeByte == 0x01)
-                    {
-                        ReadNullTerminatedString(reader);
-                    }
-                    else if (typeByte == 0x02)
-                    {
-                        reader.ReadBytes(4);
-                    }
+                    return;
                 }
-                else
-                {
-                    depth--;
-                    logger.Debug($"SkipObject: Fim de objeto (0x08) encontrado. Profundidade: {depth}.");
-                }
+
+                ReadNullTerminatedString(reader);
+                SkipValue(reader, valueType);
             }
-            if (depth != 0)
-            {
-                logger.Warn($"SkipObject: Erro ao pular objeto, profundidade final não é 0. Algo deu errado na leitura.");
-            }
-            logger.Debug($"SkipObject: Objeto pulado. Posição final: {reader.BaseStream.Position}.");
+
+            throw new EndOfStreamException("Unexpected end of stream while reading a VDF object.");
         }
 
-        private string ReadNullTerminatedString(BinaryReader reader)
+        private void SkipValue(BinaryReader reader, byte valueType)
+        {
+            switch (valueType)
+            {
+                case VdfObject:
+                    SkipObject(reader);
+                    break;
+                case VdfString:
+                    ReadNullTerminatedString(reader);
+                    break;
+                case VdfInt32:
+                case VdfFloat32:
+                case VdfPointer:
+                case VdfColor:
+                    EnsureBytesAvailable(reader, 4);
+                    reader.BaseStream.Seek(4, SeekOrigin.Current);
+                    break;
+                case VdfWideString:
+                    ReadNullTerminatedWideString(reader);
+                    break;
+                case VdfUInt64:
+                case VdfInt64:
+                    EnsureBytesAvailable(reader, 8);
+                    reader.BaseStream.Seek(8, SeekOrigin.Current);
+                    break;
+                default:
+                    throw new InvalidDataException($"Unsupported VDF type: 0x{valueType:X2}.");
+            }
+        }
+
+        private static string ReadNullTerminatedString(BinaryReader reader)
         {
             var bytes = new List<byte>();
-            byte b;
-            long initialPosition = reader.BaseStream.Position;
-
-            while (reader.BaseStream.Position < reader.BaseStream.Length && (b = reader.ReadByte()) != 0x00)
+            while (reader.BaseStream.Position < reader.BaseStream.Length)
             {
-                bytes.Add(b);
+                var value = reader.ReadByte();
+                if (value == 0)
+                {
+                    return Encoding.UTF8.GetString(bytes.ToArray());
+                }
+
+                bytes.Add(value);
             }
-            string result = Encoding.UTF8.GetString(bytes.ToArray());
-            logger.Debug($"ReadNullTerminatedString: Leu '{result}' da posição {initialPosition} até {reader.BaseStream.Position} (bytes: {string.Join(" ", bytes.Select(x => x.ToString("X2")))})");
-            return result;
+
+            throw new EndOfStreamException("VDF string is missing a null terminator.");
+        }
+
+        private static void ReadNullTerminatedWideString(BinaryReader reader)
+        {
+            while (reader.BaseStream.Position + 1 < reader.BaseStream.Length)
+            {
+                if (reader.ReadUInt16() == 0)
+                {
+                    return;
+                }
+            }
+
+            throw new EndOfStreamException("UTF-16 VDF string is missing a null terminator.");
+        }
+
+        private static void EnsureBytesAvailable(BinaryReader reader, int count)
+        {
+            if (reader.BaseStream.Position + count > reader.BaseStream.Length)
+            {
+                throw new EndOfStreamException("Unexpected end of stream while reading the VDF file.");
+            }
         }
 
         private string GetSteamUserDataPath()
         {
-            try
+            var configuredUserDataPath = NormalizeDirectoryPath(Settings.UserDataPath);
+            if (!string.IsNullOrEmpty(configuredUserDataPath))
             {
-                // Primeiro, tenta o caminho do Steam definido no settings.json
-                string steamPath = settings.SteamPath;
-                if (!string.IsNullOrEmpty(steamPath))
+                if (Directory.Exists(configuredUserDataPath))
                 {
-                    if (!Directory.Exists(steamPath))
-                    {
-                        logger.Warn($"Caminho do Steam definido no settings.json não existe: {steamPath}. Tentando fallback.");
-                        PlayniteApi.Notifications.Add(new NotificationMessage(
-                            "SteamNonSteamImporterPathWarning",
-                            $"Caminho do Steam definido não existe: {steamPath}. Usando padrão.",
-                            NotificationType.Info));
-                    }
-                    else
-                    {
-                        logger.Info($"Usando caminho do Steam definido no settings.json: {steamPath}");
-                    }
+                    log.Debug($"Using configured userdata folder: {configuredUserDataPath}.");
+                    return configuredUserDataPath;
                 }
 
-                // Se não houver caminho definido ou se for inválido, usa o fallback
-                if (string.IsNullOrEmpty(steamPath) || !Directory.Exists(steamPath))
-                {
-                    steamPath = (Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam", "InstallPath", null)
-                                ?? Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null))
-                                ?.ToString();
+                log.Warning("The configured userdata folder does not exist; automatic detection will be used.");
+            }
 
-                    if (!string.IsNullOrEmpty(steamPath))
-                    {
-                        logger.Info($"Caminho do Steam encontrado no registro: {steamPath}");
-                    }
-                    else
-                    {
-                        logger.Warn("Caminho do Steam não encontrado no registro. Tentando caminho padrão.");
-                        steamPath = @"C:\Program Files (x86)\Steam";
-                        if (Directory.Exists(steamPath))
-                        {
-                            logger.Info($"Caminho padrão do Steam encontrado: {steamPath}");
-                        }
-                        else
-                        {
-                            logger.Error("Caminho padrão do Steam não existe.");
-                            steamPath = null;
-                        }
-                    }
-                }
+            var steamPath = NormalizeDirectoryPath(Settings.SteamPath);
+            if (!string.IsNullOrEmpty(steamPath) && !Directory.Exists(steamPath))
+            {
+                log.Warning("The configured Steam folder does not exist; automatic detection will be used.");
+                steamPath = null;
+            }
 
-                if (string.IsNullOrEmpty(steamPath))
-                {
-                    logger.Error("Caminho do Steam não pôde ser determinado.");
-                    return null;
-                }
+            if (string.IsNullOrEmpty(steamPath))
+            {
+                steamPath = DetectSteamPath();
+            }
 
-                // Agora, tenta o caminho do user ID definido no settings.json
-                string userDataPath = settings.UserDataPath;
-                if (!string.IsNullOrEmpty(userDataPath))
-                {
-                    if (!Directory.Exists(userDataPath))
-                    {
-                        logger.Warn($"Caminho do user ID do Steam definido no settings.json não existe: {userDataPath}. Tentando fallback.");
-                        PlayniteApi.Notifications.Add(new NotificationMessage(
-                            "SteamNonSteamImporterPathWarning",
-                            $"Caminho do user ID do Steam definido não existe: {userDataPath}. Usando padrão.",
-                            NotificationType.Info));
-                    }
-                    else
-                    {
-                        logger.Info($"Usando caminho do user ID do Steam definido no settings.json: {userDataPath}");
-                        return userDataPath;
-                    }
-                }
-
-                // Fallback para o caminho padrão do user ID (steamPath/userdata)
-                userDataPath = Path.Combine(steamPath, "userdata");
-                if (Directory.Exists(userDataPath))
-                {
-                    logger.Info($"Caminho padrão do user ID do Steam encontrado: {userDataPath}");
-                    return userDataPath;
-                }
-
-                logger.Error("Caminho do user ID do Steam não pôde ser determinado.");
+            if (string.IsNullOrEmpty(steamPath))
+            {
                 return null;
             }
-            catch (Exception ex)
+
+            var userDataPath = Path.Combine(steamPath, "userdata");
+            if (!Directory.Exists(userDataPath))
             {
-                PlayniteApi.Notifications.Add(new NotificationMessage(
-                    "SteamNonSteamImporterPathError",
-                    $"Erro ao determinar o caminho do Steam: {ex.Message}",
-                    NotificationType.Error));
-                logger.Error(ex, "Erro ao determinar o caminho do Steam.");
+                log.Warning($"Steam was found, but the userdata folder does not exist under {steamPath}.");
                 return null;
             }
+
+            log.Debug($"Detected userdata folder: {userDataPath}.");
+            return userDataPath;
+        }
+
+        private string DetectSteamPath()
+        {
+            var candidates = new[]
+            {
+                Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null)?.ToString(),
+                Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam", "InstallPath", null)?.ToString(),
+                Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null)?.ToString(),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam")
+            };
+
+            foreach (var candidate in candidates)
+            {
+                var normalized = NormalizeDirectoryPath(candidate);
+                if (!string.IsNullOrEmpty(normalized) && Directory.Exists(normalized))
+                {
+                    log.Debug($"Steam detected at {normalized}.");
+                    return normalized;
+                }
+            }
+
+            return null;
+        }
+
+        private static string NormalizeDirectoryPath(string path)
+        {
+            return string.IsNullOrWhiteSpace(path)
+                ? null
+                : path.Trim().Trim('"').Replace('/', '\\');
+        }
+
+        private static string NormalizeFilePath(string path)
+        {
+            return string.IsNullOrWhiteSpace(path)
+                ? null
+                : path.Trim().Trim('"');
+        }
+
+        private static string NormalizeIconPath(string path)
+        {
+            var normalized = NormalizeFilePath(path);
+            if (string.IsNullOrEmpty(normalized))
+            {
+                return null;
+            }
+
+            var commaIndex = normalized.LastIndexOf(',');
+            if (commaIndex > 2)
+            {
+                int iconIndex;
+                if (int.TryParse(normalized.Substring(commaIndex + 1), out iconIndex))
+                {
+                    normalized = normalized.Substring(0, commaIndex);
+                }
+            }
+
+            return normalized;
+        }
+
+        private static string GetValue(Dictionary<string, string> values, string key)
+        {
+            string value;
+            return values.TryGetValue(key, out value) ? value : null;
+        }
+
+        private void AddErrorNotification(string id, string message)
+        {
+            PlayniteApi.Notifications.Add(new NotificationMessage(id, message, NotificationType.Error));
         }
     }
 }
