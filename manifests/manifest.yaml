@@ -6,3 +6,10 @@ Packages:
     PackageUrl: https://github.com/Phalk/SteamNonSteamImporter/releases/download/1.2/SteamNonSteamImporter_8d105bff-eac4-45c5-90ba-c77fdd66b882_1_2.pext
     Changelog:
       - Some fixes, reduced log verbose
+      - Optimization
+  - Version: 1.0
+    RequiredApiVersion: 6.2.0
+    ReleaseDate: 2025-05-31
+    PackageUrl: https://github.com/Phalk/SteamNonSteamImporter/releases/download/1.0/SteamNonSteamImporter_8d105bff-eac4-45c5-90ba-c77fdd66b882_1_0.pext
+    Changelog:
+      - Initial release
